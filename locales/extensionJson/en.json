@@ -1,0 +1,8 @@
+{
+	"多快捷键动作": "Multi-Shortcut Action",
+	"让顶部菜单、主快捷键和备用快捷键共同触发同一个插件动作，两个快捷键均可在设置中修改。": "Lets a header-menu command, a primary shortcut, and a secondary shortcut trigger the same extension action. Both shortcuts are user-configurable.",
+	"多快捷键": "Multiple Shortcuts",
+	"执行共享动作": "Run Shared Action",
+	"查看快捷键状态": "View Shortcut Status",
+	"关于...": "About..."
+}
