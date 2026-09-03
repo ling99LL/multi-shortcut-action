@@ -1,0 +1,102 @@
+{
+	"name": "multi-shortcut-action",
+	"uuid": "fc3eb57005174eb08b1858b99e4f1f02",
+	"displayName": "多快捷键动作",
+	"description": "让顶部菜单、主快捷键和备用快捷键共同触发同一个插件动作，两个快捷键均可在设置中修改。",
+	"version": "1.0.0",
+	"publisher": "鸢枭",
+	"engines": {
+		"eda": "^4.2.0"
+	},
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/ling99LL/multi-shortcut-action.git"
+	},
+	"categories": "Other",
+	"keywords": [
+		"Shortcut",
+		"Hotkey",
+		"Productivity",
+		"Tool"
+	],
+	"images": {
+		"logo": "./images/multi-shortcut-action.png"
+	},
+	"homepage": "https://github.com/ling99LL/multi-shortcut-action#readme",
+	"bugs": "https://github.com/ling99LL/multi-shortcut-action/issues",
+	"activationEvents": {},
+	"entry": "./dist/index",
+	"dependentExtensions": {},
+	"headerMenus": {
+		"home": [
+			{
+				"id": "multi-shortcut-action-home",
+				"title": "多快捷键",
+				"menuItems": [
+					{
+						"id": "multi-shortcut-action-run-home",
+						"title": "执行共享动作",
+						"registerFn": "runSharedAction"
+					},
+					{
+						"id": "multi-shortcut-action-status-home",
+						"title": "查看快捷键状态",
+						"registerFn": "showShortcutStatus"
+					},
+					{
+						"id": "multi-shortcut-action-about-home",
+						"title": "关于...",
+						"registerFn": "about"
+					}
+				]
+			}
+		],
+		"sch": [
+			{
+				"id": "multi-shortcut-action-sch",
+				"title": "多快捷键",
+				"menuItems": [
+					{
+						"id": "multi-shortcut-action-run-sch",
+						"title": "执行共享动作",
+						"registerFn": "runSharedAction"
+					},
+					{
+						"id": "multi-shortcut-action-status-sch",
+						"title": "查看快捷键状态",
+						"registerFn": "showShortcutStatus"
+					},
+					{
+						"id": "multi-shortcut-action-about-sch",
+						"title": "关于...",
+						"registerFn": "about"
+					}
+				]
+			}
+		],
+		"pcb": [
+			{
+				"id": "multi-shortcut-action-pcb",
+				"title": "多快捷键",
+				"menuItems": [
+					{
+						"id": "multi-shortcut-action-run-pcb",
+						"title": "执行共享动作",
+						"registerFn": "runSharedAction"
+					},
+					{
+						"id": "multi-shortcut-action-status-pcb",
+						"title": "查看快捷键状态",
+						"registerFn": "showShortcutStatus"
+					},
+					{
+						"id": "multi-shortcut-action-about-pcb",
+						"title": "关于...",
+						"registerFn": "about"
+					}
+				]
+			}
+		]
+	}
+}
