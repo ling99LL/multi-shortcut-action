@@ -1,15 +1,28 @@
 /**
  * 多快捷键动作 / Multi-Shortcut Action
  *
- * 两个独立快捷键注册项共享同一个回调函数。每个快捷键都可以在
- * 嘉立创EDA的快捷键设置中单独修改。
+ * 两个独立快捷键注册项共享同一个回调函数，并提供一个仅在 PCB 编辑器
+ * 生效的布线冲突模式切换快捷键。每个快捷键都可以在嘉立创EDA的快捷键
+ * 设置中单独修改。
  */
 import extensionConfig from '../extension.json' with { type: 'json' };
+import {
+	ROUTING_MODE_BLOCK,
+	ROUTING_MODE_IGNORE,
+	ROUTING_MODE_PUSH,
+	ROUTING_MODE_SURROUND,
+	toggleRoutingModeInSource,
+} from './routing-mode';
+
+type ShortcutAction = 'shared' | 'routingMode';
 
 interface ShortcutDefinition {
 	id: string;
 	titleTag: string;
 	defaultShortcut: TSYS_ShortcutKeys;
+	action: ShortcutAction;
+	remarkTag?: string;
+	range?: ESYS_ShortcutKeyEffectiveEditorRange[];
 }
 
 const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
@@ -17,11 +30,21 @@ const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		id: 'shared-action-primary',
 		titleTag: 'shortcut.primary.title',
 		defaultShortcut: ['CONTROL', 'ALT', 'SHIFT', 'F9'],
+		action: 'shared',
 	},
 	{
 		id: 'shared-action-secondary',
 		titleTag: 'shortcut.secondary.title',
 		defaultShortcut: ['CONTROL', 'ALT', 'SHIFT', 'F10'],
+		action: 'shared',
+	},
+	{
+		id: 'routing-mode-toggle',
+		titleTag: 'shortcut.routingMode.title',
+		defaultShortcut: ['CONTROL', 'ALT', 'SHIFT', 'F11'],
+		action: 'routingMode',
+		remarkTag: 'shortcut.routingMode.remark',
+		range: [ESYS_ShortcutKeyEffectiveEditorRange.PCB],
 	},
 ];
 
@@ -69,6 +92,7 @@ const KEY_LABELS: Partial<Record<TSYS_ShortcutKeys[number], string>> = {
 };
 
 let executionCount = 0;
+let routingModeOperationInProgress = false;
 
 function text(tag: string, ...args: unknown[]): string {
 	return eda.sys_I18n.text(tag, undefined, undefined, ...args);
@@ -85,14 +109,18 @@ function formatShortcut(shortcut: TSYS_ShortcutKeys | null | undefined): string 
 	return shortcut.map(key => KEY_LABELS[key] ?? key).join(' + ');
 }
 
+function getShortcutAction(action: ShortcutAction): () => void | Promise<void> {
+	return action === 'routingMode' ? toggleRoutingConflictMode : runSharedAction;
+}
+
 function registerShortcut(definition: ShortcutDefinition): boolean {
 	return eda.sys_ShortcutKey.register(definition.id, {
 		shortcutKey: [...definition.defaultShortcut],
 		title: text(definition.titleTag),
-		remark: text('shortcut.remark'),
-		range: [...EFFECTIVE_RANGES],
+		remark: text(definition.remarkTag ?? 'shortcut.remark'),
+		range: [...(definition.range ?? EFFECTIVE_RANGES)],
 		scene: [...EFFECTIVE_SCENES],
-		callFn: runSharedAction,
+		callFn: getShortcutAction(definition.action),
 	});
 }
 
@@ -125,7 +153,7 @@ export function activate(status?: 'onStartupFinished', arg?: string): void {
 }
 
 /**
- * 顶部菜单和两个快捷键共同调用的唯一动作函数。
+ * 顶部菜单和两个共享动作快捷键共同调用的唯一动作函数。
  */
 export function runSharedAction(): void {
 	executionCount += 1;
@@ -134,6 +162,86 @@ export function runSharedAction(): void {
 		ESYS_ToastMessageType.SUCCESS,
 		3,
 	);
+}
+
+function routingModeLabel(mode: number | undefined): string {
+	switch (mode) {
+		case ROUTING_MODE_IGNORE:
+			return text('routingMode.ignore');
+		case ROUTING_MODE_PUSH:
+			return text('routingMode.push');
+		case ROUTING_MODE_SURROUND:
+			return text('routingMode.surround');
+		case ROUTING_MODE_BLOCK:
+			return text('routingMode.block');
+		default:
+			return text('routingMode.unknown', mode ?? '?');
+	}
+}
+
+/**
+ * 在当前 PCB 文档的“忽略”和“阻挡”之间切换布线冲突模式。
+ *
+ * 文档源码接口是官方 BETA API；只修改 PREFERENCE 记录中的 routingMode，
+ * 不模拟键盘事件，也不覆盖嘉立创EDA系统快捷键。
+ */
+export async function toggleRoutingConflictMode(): Promise<void> {
+	if (routingModeOperationInProgress) {
+		eda.sys_Message.showToastMessage(
+			text('routingMode.busy'),
+			ESYS_ToastMessageType.WARNING,
+			3,
+		);
+		return;
+	}
+
+	routingModeOperationInProgress = true;
+	try {
+		const fileManager = eda.sys_FileManager;
+		if (
+			!fileManager
+			|| typeof fileManager.getDocumentSource !== 'function'
+			|| typeof fileManager.setDocumentSource !== 'function'
+		) {
+			throw new Error(text('routingMode.apiUnavailable'));
+		}
+
+		const source = await fileManager.getDocumentSource();
+		if (typeof source !== 'string' || source.length === 0) {
+			throw new Error(text('routingMode.documentUnavailable'));
+		}
+
+		const update = toggleRoutingModeInSource(source);
+		if (!update) {
+			throw new Error(text('routingMode.notSupported'));
+		}
+
+		const updated = await fileManager.setDocumentSource(update.source);
+		if (!updated) {
+			throw new Error(text('routingMode.saveFailed'));
+		}
+
+		eda.sys_Message.showToastMessage(
+			text(
+				'routingMode.changed',
+				routingModeLabel(update.previousMode),
+				routingModeLabel(update.nextMode),
+			),
+			ESYS_ToastMessageType.SUCCESS,
+			3,
+		);
+	}
+	catch (error) {
+		console.error(`[${extensionConfig.displayName}] Failed to toggle routing mode:`, error);
+		eda.sys_Message.showToastMessage(
+			text('routingMode.error', formatError(error)),
+			ESYS_ToastMessageType.ERROR,
+			5,
+		);
+	}
+	finally {
+		routingModeOperationInProgress = false;
+	}
 }
 
 export function showShortcutStatus(): void {
@@ -176,12 +284,14 @@ export function showShortcutStatus(): void {
 }
 
 export function about(): void {
+	const routingModeShortcut = SHORTCUT_DEFINITIONS.find(definition => definition.action === 'routingMode');
 	eda.sys_Dialog.showInformationMessage(
 		[
 			text('about.description'),
 			'',
 			text('about.defaultPrimary', formatShortcut(SHORTCUT_DEFINITIONS[0].defaultShortcut)),
 			text('about.defaultSecondary', formatShortcut(SHORTCUT_DEFINITIONS[1].defaultShortcut)),
+			text('about.defaultRoutingMode', formatShortcut(routingModeShortcut?.defaultShortcut)),
 			'',
 			text('about.settingsHint'),
 			text('about.systemLimit'),

@@ -1,8 +1,9 @@
 {
 	"多快捷键动作": "Multi-Shortcut Action",
-	"让顶部菜单、主快捷键和备用快捷键共同触发同一个插件动作，两个快捷键均可在设置中修改。": "Lets a header-menu command, a primary shortcut, and a secondary shortcut trigger the same extension action. Both shortcuts are user-configurable.",
+	"让顶部菜单、主快捷键和备用快捷键共同触发同一个插件动作，并提供PCB布线冲突模式切换快捷键；所有快捷键均可在设置中修改。": "Lets a header-menu command, a primary shortcut, and a secondary shortcut trigger the same extension action, and adds a PCB routing conflict mode shortcut. All shortcuts are user-configurable.",
 	"多快捷键": "Multiple Shortcuts",
 	"执行共享动作": "Run Shared Action",
 	"查看快捷键状态": "View Shortcut Status",
+	"切换布线冲突模式（阻挡/忽略）": "Toggle Routing Conflict Mode (Block/Ignore)",
 	"关于...": "About..."
 }

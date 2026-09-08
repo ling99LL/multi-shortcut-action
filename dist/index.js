@@ -24,7 +24,8 @@ var edaEsbuildExportName = (() => {
     about: () => about,
     activate: () => activate,
     runSharedAction: () => runSharedAction,
-    showShortcutStatus: () => showShortcutStatus
+    showShortcutStatus: () => showShortcutStatus,
+    toggleRoutingConflictMode: () => toggleRoutingConflictMode
   });
 
   // extension.json
@@ -32,8 +33,8 @@ var edaEsbuildExportName = (() => {
     name: "multi-shortcut-action",
     uuid: "fc3eb57005174eb08b1858b99e4f1f02",
     displayName: "\u591A\u5FEB\u6377\u952E\u52A8\u4F5C",
-    description: "\u8BA9\u9876\u90E8\u83DC\u5355\u3001\u4E3B\u5FEB\u6377\u952E\u548C\u5907\u7528\u5FEB\u6377\u952E\u5171\u540C\u89E6\u53D1\u540C\u4E00\u4E2A\u63D2\u4EF6\u52A8\u4F5C\uFF0C\u4E24\u4E2A\u5FEB\u6377\u952E\u5747\u53EF\u5728\u8BBE\u7F6E\u4E2D\u4FEE\u6539\u3002",
-    version: "1.0.0",
+    description: "\u8BA9\u9876\u90E8\u83DC\u5355\u3001\u4E3B\u5FEB\u6377\u952E\u548C\u5907\u7528\u5FEB\u6377\u952E\u5171\u540C\u89E6\u53D1\u540C\u4E00\u4E2A\u63D2\u4EF6\u52A8\u4F5C\uFF0C\u5E76\u63D0\u4F9BPCB\u5E03\u7EBF\u51B2\u7A81\u6A21\u5F0F\u5207\u6362\u5FEB\u6377\u952E\uFF1B\u6240\u6709\u5FEB\u6377\u952E\u5747\u53EF\u5728\u8BBE\u7F6E\u4E2D\u4FEE\u6539\u3002",
+    version: "1.1.0",
     publisher: "\u9E22\u67AD",
     engines: {
       eda: "^4.2.0"
@@ -48,7 +49,9 @@ var edaEsbuildExportName = (() => {
       "Shortcut",
       "Hotkey",
       "Productivity",
-      "Tool"
+      "Tool",
+      "PCB",
+      "Routing"
     ],
     images: {
       logo: "./images/multi-shortcut-action.png"
@@ -116,6 +119,11 @@ var edaEsbuildExportName = (() => {
               registerFn: "runSharedAction"
             },
             {
+              id: "multi-shortcut-action-routing-mode-pcb",
+              title: "\u5207\u6362\u5E03\u7EBF\u51B2\u7A81\u6A21\u5F0F\uFF08\u963B\u6321/\u5FFD\u7565\uFF09",
+              registerFn: "toggleRoutingConflictMode"
+            },
+            {
               id: "multi-shortcut-action-status-pcb",
               title: "\u67E5\u770B\u5FEB\u6377\u952E\u72B6\u6001",
               registerFn: "showShortcutStatus"
@@ -131,17 +139,212 @@ var edaEsbuildExportName = (() => {
     }
   };
 
+  // src/routing-mode.ts
+  var ROUTING_MODE_IGNORE = 0;
+  var ROUTING_MODE_PUSH = 1;
+  var ROUTING_MODE_SURROUND = 2;
+  var ROUTING_MODE_BLOCK = 3;
+  function isJsonObject(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function removeTrailingCommas(value) {
+    let normalized = "";
+    let inString = false;
+    let escaped = false;
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index];
+      if (inString) {
+        normalized += character;
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+        normalized += character;
+        continue;
+      }
+      if (character === ",") {
+        let nextIndex = index + 1;
+        while (/\s/.test(value[nextIndex] ?? "")) {
+          nextIndex += 1;
+        }
+        if (value[nextIndex] === "}" || value[nextIndex] === "]") {
+          continue;
+        }
+      }
+      normalized += character;
+    }
+    return normalized;
+  }
+  function parseJsonText(value) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      try {
+        return JSON.parse(removeTrailingCommas(value));
+      } catch {
+        return void 0;
+      }
+    }
+  }
+  function parseJsonValueAt(source, start) {
+    const firstCharacter = source[start];
+    if (firstCharacter !== "{" && firstCharacter !== "[") {
+      return void 0;
+    }
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < source.length; index += 1) {
+      const character = source[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+      } else if (character === "{" || character === "[") {
+        depth += 1;
+      } else if (character === "}" || character === "]") {
+        depth -= 1;
+        if (depth === 0) {
+          const value = parseJsonText(source.slice(start, index + 1));
+          if (value === void 0) {
+            return void 0;
+          }
+          return { start, end: index + 1, value };
+        }
+        if (depth < 0) {
+          return void 0;
+        }
+      }
+    }
+    return void 0;
+  }
+  function skipWhitespace(source, start) {
+    let index = start;
+    while (/\s/.test(source[index] ?? "")) {
+      index += 1;
+    }
+    return index;
+  }
+  function getRoutingMode(body) {
+    const value = body.routingMode;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim() !== "") {
+      const numericValue = Number(value);
+      if (Number.isFinite(numericValue)) {
+        return numericValue;
+      }
+    }
+    return void 0;
+  }
+  function findRoutingModeTarget(source) {
+    for (let cursor = 0; cursor < source.length; cursor += 1) {
+      const character = source[cursor];
+      if (character !== "{" && character !== "[") {
+        continue;
+      }
+      const parsed = parseJsonValueAt(source, cursor);
+      if (!parsed) {
+        continue;
+      }
+      if (isJsonObject(parsed.value) && parsed.value.type === "PREFERENCE") {
+        if ("routingMode" in parsed.value) {
+          return {
+            start: parsed.start,
+            end: parsed.end,
+            body: parsed.value,
+            wrap: (body2) => body2
+          };
+        }
+        let bodyStart = skipWhitespace(source, parsed.end);
+        if (source.slice(bodyStart, bodyStart + 2) !== "||") {
+          cursor = parsed.end - 1;
+          continue;
+        }
+        bodyStart = skipWhitespace(source, bodyStart + 2);
+        const body = parseJsonValueAt(source, bodyStart);
+        if (body && isJsonObject(body.value)) {
+          return {
+            start: body.start,
+            end: body.end,
+            body: body.value,
+            wrap: (value) => value
+          };
+        }
+      }
+      if (Array.isArray(parsed.value) && parsed.value[0] === "PREFERENCE" && isJsonObject(parsed.value[1])) {
+        const body = parsed.value[1];
+        return {
+          start: parsed.start,
+          end: parsed.end,
+          body,
+          wrap: (value) => {
+            const record = [...parsed.value];
+            record[1] = value;
+            return record;
+          }
+        };
+      }
+      cursor = parsed.end - 1;
+    }
+    return void 0;
+  }
+  function toggleRoutingModeInSource(source) {
+    const target = findRoutingModeTarget(source);
+    if (!target) {
+      return void 0;
+    }
+    const previousMode = getRoutingMode(target.body);
+    const nextMode = previousMode === ROUTING_MODE_BLOCK ? ROUTING_MODE_IGNORE : ROUTING_MODE_BLOCK;
+    const updatedBody = { ...target.body, routingMode: nextMode };
+    const replacement = JSON.stringify(target.wrap(updatedBody));
+    if (replacement === void 0) {
+      return void 0;
+    }
+    return {
+      source: `${source.slice(0, target.start)}${replacement}${source.slice(target.end)}`,
+      previousMode,
+      nextMode
+    };
+  }
+
   // src/index.ts
   var SHORTCUT_DEFINITIONS = [
     {
       id: "shared-action-primary",
       titleTag: "shortcut.primary.title",
-      defaultShortcut: ["CONTROL", "ALT", "SHIFT", "F9"]
+      defaultShortcut: ["CONTROL", "ALT", "SHIFT", "F9"],
+      action: "shared"
     },
     {
       id: "shared-action-secondary",
       titleTag: "shortcut.secondary.title",
-      defaultShortcut: ["CONTROL", "ALT", "SHIFT", "F10"]
+      defaultShortcut: ["CONTROL", "ALT", "SHIFT", "F10"],
+      action: "shared"
+    },
+    {
+      id: "routing-mode-toggle",
+      titleTag: "shortcut.routingMode.title",
+      defaultShortcut: ["CONTROL", "ALT", "SHIFT", "F11"],
+      action: "routingMode",
+      remarkTag: "shortcut.routingMode.remark",
+      range: [ESYS_ShortcutKeyEffectiveEditorRange.PCB]
     }
   ];
   var EFFECTIVE_RANGES = [
@@ -185,6 +388,7 @@ var edaEsbuildExportName = (() => {
     WIN: "Win"
   };
   var executionCount = 0;
+  var routingModeOperationInProgress = false;
   function text(tag, ...args) {
     return eda.sys_I18n.text(tag, void 0, void 0, ...args);
   }
@@ -197,14 +401,17 @@ var edaEsbuildExportName = (() => {
     }
     return shortcut.map((key) => KEY_LABELS[key] ?? key).join(" + ");
   }
+  function getShortcutAction(action) {
+    return action === "routingMode" ? toggleRoutingConflictMode : runSharedAction;
+  }
   function registerShortcut(definition) {
     return eda.sys_ShortcutKey.register(definition.id, {
       shortcutKey: [...definition.defaultShortcut],
       title: text(definition.titleTag),
-      remark: text("shortcut.remark"),
-      range: [...EFFECTIVE_RANGES],
+      remark: text(definition.remarkTag ?? "shortcut.remark"),
+      range: [...definition.range ?? EFFECTIVE_RANGES],
       scene: [...EFFECTIVE_SCENES],
-      callFn: runSharedAction
+      callFn: getShortcutAction(definition.action)
     });
   }
   function activate(status, arg) {
@@ -234,6 +441,67 @@ var edaEsbuildExportName = (() => {
       ESYS_ToastMessageType.SUCCESS,
       3
     );
+  }
+  function routingModeLabel(mode) {
+    switch (mode) {
+      case ROUTING_MODE_IGNORE:
+        return text("routingMode.ignore");
+      case ROUTING_MODE_PUSH:
+        return text("routingMode.push");
+      case ROUTING_MODE_SURROUND:
+        return text("routingMode.surround");
+      case ROUTING_MODE_BLOCK:
+        return text("routingMode.block");
+      default:
+        return text("routingMode.unknown", mode ?? "?");
+    }
+  }
+  async function toggleRoutingConflictMode() {
+    if (routingModeOperationInProgress) {
+      eda.sys_Message.showToastMessage(
+        text("routingMode.busy"),
+        ESYS_ToastMessageType.WARNING,
+        3
+      );
+      return;
+    }
+    routingModeOperationInProgress = true;
+    try {
+      const fileManager = eda.sys_FileManager;
+      if (!fileManager || typeof fileManager.getDocumentSource !== "function" || typeof fileManager.setDocumentSource !== "function") {
+        throw new Error(text("routingMode.apiUnavailable"));
+      }
+      const source = await fileManager.getDocumentSource();
+      if (typeof source !== "string" || source.length === 0) {
+        throw new Error(text("routingMode.documentUnavailable"));
+      }
+      const update = toggleRoutingModeInSource(source);
+      if (!update) {
+        throw new Error(text("routingMode.notSupported"));
+      }
+      const updated = await fileManager.setDocumentSource(update.source);
+      if (!updated) {
+        throw new Error(text("routingMode.saveFailed"));
+      }
+      eda.sys_Message.showToastMessage(
+        text(
+          "routingMode.changed",
+          routingModeLabel(update.previousMode),
+          routingModeLabel(update.nextMode)
+        ),
+        ESYS_ToastMessageType.SUCCESS,
+        3
+      );
+    } catch (error) {
+      console.error(`[${extension_default.displayName}] Failed to toggle routing mode:`, error);
+      eda.sys_Message.showToastMessage(
+        text("routingMode.error", formatError(error)),
+        ESYS_ToastMessageType.ERROR,
+        5
+      );
+    } finally {
+      routingModeOperationInProgress = false;
+    }
   }
   function showShortcutStatus() {
     try {
@@ -267,12 +535,14 @@ var edaEsbuildExportName = (() => {
     }
   }
   function about() {
+    const routingModeShortcut = SHORTCUT_DEFINITIONS.find((definition) => definition.action === "routingMode");
     eda.sys_Dialog.showInformationMessage(
       [
         text("about.description"),
         "",
         text("about.defaultPrimary", formatShortcut(SHORTCUT_DEFINITIONS[0].defaultShortcut)),
         text("about.defaultSecondary", formatShortcut(SHORTCUT_DEFINITIONS[1].defaultShortcut)),
+        text("about.defaultRoutingMode", formatShortcut(routingModeShortcut?.defaultShortcut)),
         "",
         text("about.settingsHint"),
         text("about.systemLimit"),

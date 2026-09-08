@@ -2,8 +2,8 @@
 	"name": "multi-shortcut-action",
 	"uuid": "fc3eb57005174eb08b1858b99e4f1f02",
 	"displayName": "多快捷键动作",
-	"description": "让顶部菜单、主快捷键和备用快捷键共同触发同一个插件动作，两个快捷键均可在设置中修改。",
-	"version": "1.0.0",
+	"description": "让顶部菜单、主快捷键和备用快捷键共同触发同一个插件动作，并提供PCB布线冲突模式切换快捷键；所有快捷键均可在设置中修改。",
+	"version": "1.1.0",
 	"publisher": "鸢枭",
 	"engines": {
 		"eda": "^4.2.0"
@@ -18,7 +18,9 @@
 		"Shortcut",
 		"Hotkey",
 		"Productivity",
-		"Tool"
+		"Tool",
+		"PCB",
+		"Routing"
 	],
 	"images": {
 		"logo": "./images/multi-shortcut-action.png"
@@ -84,6 +86,11 @@
 						"id": "multi-shortcut-action-run-pcb",
 						"title": "执行共享动作",
 						"registerFn": "runSharedAction"
+					},
+					{
+						"id": "multi-shortcut-action-routing-mode-pcb",
+						"title": "切换布线冲突模式（阻挡/忽略）",
+						"registerFn": "toggleRoutingConflictMode"
 					},
 					{
 						"id": "multi-shortcut-action-status-pcb",
