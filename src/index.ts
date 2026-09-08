@@ -2,7 +2,7 @@
  * 多快捷键动作 / Multi-Shortcut Action
  *
  * 两个独立快捷键注册项共享同一个回调函数，并提供一个可开关、仅在 PCB
- * 编辑器生效的阻挡/环绕布线模式快捷切换。每个快捷键都可以在嘉立创EDA
+ * 编辑器生效的阻挡/忽略布线模式快捷切换。每个快捷键都可以在嘉立创EDA
  * 的快捷键设置中单独修改。
  */
 import extensionConfig from '../extension.json' with { type: 'json' };
@@ -11,10 +11,45 @@ import {
 	ROUTING_MODE_IGNORE,
 	ROUTING_MODE_PUSH,
 	ROUTING_MODE_SURROUND,
-	toggleBlockSurroundRoutingModeInSource,
+	toggleBlockIgnoreRoutingModeInSource,
 } from './routing-mode';
 
 type ShortcutAction = 'shared' | 'routingMode';
+type ShortcutScopeKind = 'all' | 'pcb';
+type RuntimeEnum = Record<string, unknown>;
+type RuntimeShortcutCallback = (shortcutKey?: TSYS_ShortcutKeys) => void | Promise<void>;
+type ShortcutRegistrationMode = 'id' | 'legacy' | 'unavailable';
+
+interface RuntimeShortcutData {
+	shortcutKey?: TSYS_ShortcutKeys | null;
+	title?: string;
+	userDefinedShortcutKey?: TSYS_ShortcutKeys | null;
+}
+
+interface RuntimeShortcutRegistrationData {
+	shortcutKey: TSYS_ShortcutKeys | null;
+	title: string;
+	remark: string;
+	range: number[];
+	scene: number[];
+	callFn: RuntimeShortcutCallback;
+}
+
+interface RuntimeShortcutApi {
+	registerShortcutKey?: (
+		shortcutKey: TSYS_ShortcutKeys,
+		title: string,
+		callbackFn: RuntimeShortcutCallback,
+		documentType?: number[],
+		scene?: number[],
+	) => boolean | Promise<boolean>;
+	register?: (
+		id: string,
+		props: RuntimeShortcutRegistrationData,
+	) => boolean | Promise<boolean>;
+	getShortcutKeys?: (includeSystem?: boolean) => Promise<unknown> | unknown;
+	get?: (id: string) => RuntimeShortcutData | Promise<RuntimeShortcutData | undefined> | undefined;
+}
 
 interface ShortcutDefinition {
 	id: string;
@@ -22,7 +57,12 @@ interface ShortcutDefinition {
 	defaultShortcut: TSYS_ShortcutKeys;
 	action: ShortcutAction;
 	remarkTag?: string;
-	range?: ESYS_ShortcutKeyEffectiveEditorRange[];
+	scope: ShortcutScopeKind;
+}
+
+interface ShortcutScope {
+	range: number[];
+	scene: number[];
 }
 
 const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
@@ -31,12 +71,14 @@ const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		titleTag: 'shortcut.primary.title',
 		defaultShortcut: ['CONTROL', 'ALT', 'SHIFT', 'F9'],
 		action: 'shared',
+		scope: 'all',
 	},
 	{
 		id: 'shared-action-secondary',
 		titleTag: 'shortcut.secondary.title',
 		defaultShortcut: ['CONTROL', 'ALT', 'SHIFT', 'F10'],
 		action: 'shared',
+		scope: 'all',
 	},
 	{
 		id: 'routing-mode-toggle',
@@ -44,35 +86,37 @@ const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 		defaultShortcut: ['SHIFT', 'R'],
 		action: 'routingMode',
 		remarkTag: 'shortcut.routingMode.remark',
-		range: [ESYS_ShortcutKeyEffectiveEditorRange.PCB],
+		scope: 'pcb',
 	},
 ];
 
-const EFFECTIVE_RANGES: ESYS_ShortcutKeyEffectiveEditorRange[] = [
-	ESYS_ShortcutKeyEffectiveEditorRange.BLANK,
-	ESYS_ShortcutKeyEffectiveEditorRange.HOME,
-	ESYS_ShortcutKeyEffectiveEditorRange.SCHEMATIC_PAGE,
-	ESYS_ShortcutKeyEffectiveEditorRange.SYMBOL,
-	ESYS_ShortcutKeyEffectiveEditorRange.PCB,
-	ESYS_ShortcutKeyEffectiveEditorRange.FOOTPRINT,
-	ESYS_ShortcutKeyEffectiveEditorRange.PANEL,
-	ESYS_ShortcutKeyEffectiveEditorRange.PCB_3D_PREVIEW,
-	ESYS_ShortcutKeyEffectiveEditorRange.PCB_2D_PREVIEW,
-	ESYS_ShortcutKeyEffectiveEditorRange.PANEL_3D_PREVIEW,
-	ESYS_ShortcutKeyEffectiveEditorRange.PANEL_LIBRARY,
-	ESYS_ShortcutKeyEffectiveEditorRange.ASSEMBLY_VARIANT,
-	ESYS_ShortcutKeyEffectiveEditorRange.SIMULATION_SCHEMATIC_PAGE_NGSPICE,
-	ESYS_ShortcutKeyEffectiveEditorRange.SIMULATION_SCHEMATIC_PAGE_SIMULIDE,
-	ESYS_ShortcutKeyEffectiveEditorRange.SIMULATION_WAVEFORM,
+// 新版 API 使用 Range 名称，旧版 API 使用 DocumentType 名称。两套枚举的
+// 公共成员值由 EasyEDA 运行时提供，扩展不在运行时硬编码枚举值。
+const RANGE_MEMBER_NAMES: readonly string[] = [
+	'BLANK',
+	'HOME',
+	'SCHEMATIC_PAGE',
+	'SYMBOL',
+	'PCB',
+	'FOOTPRINT',
+	'PANEL',
+	'PCB_3D_PREVIEW',
+	'PCB_2D_PREVIEW',
+	'PANEL_3D_PREVIEW',
+	'PANEL_LIBRARY',
+	'ASSEMBLY_VARIANT',
+	'SIMULATION_SCHEMATIC_PAGE_NGSPICE',
+	'SIMULATION_SCHEMATIC_PAGE_SIMULIDE',
+	'SIMULATION_WAVEFORM',
 ];
 
-const EFFECTIVE_SCENES: ESYS_ShortcutKeyEffectiveEditorScene[] = [
-	ESYS_ShortcutKeyEffectiveEditorScene.EDITOR,
-	ESYS_ShortcutKeyEffectiveEditorScene.CANVAS_SELECTED,
-	ESYS_ShortcutKeyEffectiveEditorScene.CANVAS_NOT_SELECT,
-	ESYS_ShortcutKeyEffectiveEditorScene.DRAWING,
-	ESYS_ShortcutKeyEffectiveEditorScene.PLACING,
-	ESYS_ShortcutKeyEffectiveEditorScene.LOCAL,
+const SCENE_MEMBER_NAMES: readonly (readonly string[])[] = [
+	['EDITOR'],
+	['CANVAS_SELECTED', 'SELECT_CANVAS'],
+	['CANVAS_NOT_SELECT', 'NOT_SELECT_CANVAS'],
+	['DRAWING', 'DRAW'],
+	['PLACING', 'PLACE'],
+	['LOCAL'],
 ];
 
 const KEY_LABELS: Partial<Record<TSYS_ShortcutKeys[number], string>> = {
@@ -97,6 +141,12 @@ let executionCount = 0;
 let routingModeSwitchEnabled = false;
 let routingModeSwitchOperationInProgress = false;
 let routingModeOperationInProgress = false;
+let shortcutRegistrationMode: ShortcutRegistrationMode = 'unavailable';
+let shortcutRegistrationAttempted = false;
+let shortcutRegistrationError: string | undefined;
+let shortcutRegistrationPromise: Promise<void> | undefined;
+const shortcutRegistrationResults = new Map<string, boolean>();
+const shortcutRegistrationErrors = new Map<string, string>();
 
 function text(tag: string, ...args: unknown[]): string {
 	return eda.sys_I18n.text(tag, undefined, undefined, ...args);
@@ -113,19 +163,233 @@ function formatShortcut(shortcut: TSYS_ShortcutKeys | null | undefined): string 
 	return shortcut.map(key => KEY_LABELS[key] ?? key).join(' + ');
 }
 
-function getShortcutAction(action: ShortcutAction): () => void | Promise<void> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
+
+function getRuntimeRangeEnum(): RuntimeEnum | undefined {
+	if (typeof ESYS_ShortcutKeyEffectiveEditorRange !== 'undefined') {
+		return ESYS_ShortcutKeyEffectiveEditorRange as unknown as RuntimeEnum;
+	}
+	if (typeof ESYS_ShortcutKeyEffectiveEditorDocumentType !== 'undefined') {
+		return ESYS_ShortcutKeyEffectiveEditorDocumentType;
+	}
+	return undefined;
+}
+
+function getRuntimeSceneEnum(): RuntimeEnum | undefined {
+	if (typeof ESYS_ShortcutKeyEffectiveEditorScene === 'undefined') {
+		return undefined;
+	}
+	return ESYS_ShortcutKeyEffectiveEditorScene as unknown as RuntimeEnum;
+}
+
+function resolveRuntimeEnumMember(runtimeEnum: RuntimeEnum, names: readonly string[]): number | undefined {
+	for (const name of names) {
+		const value = runtimeEnum[name];
+		if (typeof value === 'number') {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+function resolveRuntimeEnumMembers(runtimeEnum: RuntimeEnum, names: readonly string[]): number[] {
+	return names.flatMap((name) => {
+		const value = resolveRuntimeEnumMember(runtimeEnum, [name]);
+		return value === undefined ? [] : [value];
+	});
+}
+
+function resolveSceneValues(runtimeEnum: RuntimeEnum): number[] {
+	const values: number[] = [];
+	for (const names of SCENE_MEMBER_NAMES) {
+		const value = resolveRuntimeEnumMember(runtimeEnum, names);
+		if (value === undefined) {
+			throw new Error(text('shortcut.runtimeEnumMemberUnavailable'));
+		}
+		values.push(value);
+	}
+	return values;
+}
+
+function resolveShortcutScope(definition: ShortcutDefinition): ShortcutScope {
+	const rangeEnum = getRuntimeRangeEnum();
+	const sceneEnum = getRuntimeSceneEnum();
+	if (!rangeEnum || !sceneEnum) {
+		throw new Error(text('shortcut.runtimeEnumUnavailable'));
+	}
+
+	const scene = resolveSceneValues(sceneEnum);
+	if (definition.scope === 'pcb') {
+		const pcb = resolveRuntimeEnumMember(rangeEnum, ['PCB']);
+		if (pcb === undefined) {
+			throw new Error(text('shortcut.runtimeEnumMemberUnavailable'));
+		}
+		return { range: [pcb], scene };
+	}
+
+	const range = resolveRuntimeEnumMembers(rangeEnum, RANGE_MEMBER_NAMES);
+	if (range.length === 0) {
+		throw new Error(text('shortcut.runtimeEnumMemberUnavailable'));
+	}
+	return { range, scene };
+}
+
+function getShortcutApi(): RuntimeShortcutApi {
+	if (typeof eda === 'undefined') {
+		throw new TypeError(text('shortcut.apiUnavailable'));
+	}
+
+	const shortcutApi = (eda as unknown as { sys_ShortcutKey?: unknown }).sys_ShortcutKey;
+	if (!isRecord(shortcutApi)) {
+		throw new Error(text('shortcut.apiUnavailable'));
+	}
+	return shortcutApi as RuntimeShortcutApi;
+}
+
+function detectShortcutRegistrationMode(api: RuntimeShortcutApi): ShortcutRegistrationMode {
+	if (typeof api.register === 'function') {
+		return 'id';
+	}
+	if (typeof api.registerShortcutKey === 'function') {
+		return 'legacy';
+	}
+	return 'unavailable';
+}
+
+function getShortcutAction(action: ShortcutAction): RuntimeShortcutCallback {
 	return action === 'routingMode' ? toggleRoutingConflictMode : runSharedAction;
 }
 
-function registerShortcut(definition: ShortcutDefinition): boolean {
-	return eda.sys_ShortcutKey.register(definition.id, {
-		shortcutKey: [...definition.defaultShortcut],
-		title: text(definition.titleTag),
-		remark: text(definition.remarkTag ?? 'shortcut.remark'),
-		range: [...(definition.range ?? EFFECTIVE_RANGES)],
-		scene: [...EFFECTIVE_SCENES],
-		callFn: getShortcutAction(definition.action),
-	});
+async function registerShortcut(
+	api: RuntimeShortcutApi,
+	mode: ShortcutRegistrationMode,
+	definition: ShortcutDefinition,
+	scope: ShortcutScope,
+): Promise<boolean> {
+	const shortcutKey = [...definition.defaultShortcut] as TSYS_ShortcutKeys;
+	const title = text(definition.titleTag);
+	const callback = getShortcutAction(definition.action);
+
+	if (mode === 'legacy') {
+		if (typeof api.registerShortcutKey !== 'function') {
+			return false;
+		}
+		return Boolean(await api.registerShortcutKey(
+			shortcutKey,
+			title,
+			callback,
+			scope.range,
+			scope.scene,
+		));
+	}
+
+	if (mode === 'id') {
+		if (typeof api.register !== 'function') {
+			return false;
+		}
+		return Boolean(await api.register(definition.id, {
+			shortcutKey,
+			title,
+			remark: text(definition.remarkTag ?? 'shortcut.remark'),
+			range: scope.range,
+			scene: scope.scene,
+			callFn: callback,
+		}));
+	}
+
+	return false;
+}
+
+function showShortcutToast(message: string, messageType: ESYS_ToastMessageType, timer: number): void {
+	eda.sys_Message.showToastMessage(message, messageType, timer);
+}
+
+function handleShortcutRegistrationError(error: unknown): void {
+	const message = formatError(error);
+	shortcutRegistrationError = message;
+	for (const definition of SHORTCUT_DEFINITIONS) {
+		if (!shortcutRegistrationResults.has(definition.id)) {
+			shortcutRegistrationResults.set(definition.id, false);
+		}
+	}
+	console.error(`[${extensionConfig.displayName}] Shortcut registration error:`, error);
+	showShortcutToast(
+		text('shortcut.registration.error', message),
+		ESYS_ToastMessageType.ERROR,
+		5,
+	);
+}
+
+async function registerShortcuts(): Promise<void> {
+	shortcutRegistrationAttempted = true;
+	shortcutRegistrationMode = 'unavailable';
+	shortcutRegistrationError = undefined;
+	shortcutRegistrationResults.clear();
+	shortcutRegistrationErrors.clear();
+
+	try {
+		const api = getShortcutApi();
+		const mode = detectShortcutRegistrationMode(api);
+		shortcutRegistrationMode = mode;
+		if (mode === 'unavailable') {
+			throw new Error(text('shortcut.apiUnavailable'));
+		}
+
+		const scopes = new Map<ShortcutScopeKind, ShortcutScope>();
+		for (const definition of SHORTCUT_DEFINITIONS) {
+			if (!scopes.has(definition.scope)) {
+				scopes.set(definition.scope, resolveShortcutScope(definition));
+			}
+		}
+
+		for (const definition of SHORTCUT_DEFINITIONS) {
+			try {
+				const scope = scopes.get(definition.scope);
+				if (!scope) {
+					throw new Error(text('shortcut.runtimeEnumUnavailable'));
+				}
+				const registered = await registerShortcut(api, mode, definition, scope);
+				shortcutRegistrationResults.set(definition.id, registered);
+				if (!registered) {
+					shortcutRegistrationErrors.set(definition.id, text('shortcut.registration.resultFalse'));
+				}
+			}
+			catch (error) {
+				shortcutRegistrationResults.set(definition.id, false);
+				shortcutRegistrationErrors.set(definition.id, formatError(error));
+				console.error(`[${extensionConfig.displayName}] Failed to register ${definition.id}:`, error);
+			}
+		}
+
+		const failedIds = SHORTCUT_DEFINITIONS
+			.filter(definition => shortcutRegistrationResults.get(definition.id) !== true)
+			.map(definition => definition.id);
+		if (failedIds.length > 0) {
+			console.error(`[${extensionConfig.displayName}] Shortcut registration failed: ${failedIds.join(', ')}`);
+			showShortcutToast(
+				text('shortcut.registration.partialFailure'),
+				ESYS_ToastMessageType.WARNING,
+				5,
+			);
+		}
+		else {
+			console.log(`[${extensionConfig.displayName}] Registered ${SHORTCUT_DEFINITIONS.length} shortcuts via ${mode}.`);
+		}
+	}
+	catch (error) {
+		handleShortcutRegistrationError(error);
+	}
+}
+
+function ensureShortcutRegistration(): Promise<void> {
+	if (!shortcutRegistrationPromise) {
+		shortcutRegistrationPromise = registerShortcuts().catch((error) => {
+			handleShortcutRegistrationError(error);
+		});
+	}
+	return shortcutRegistrationPromise;
 }
 
 function loadRoutingModeSwitchState(): void {
@@ -147,29 +411,14 @@ export function activate(status?: 'onStartupFinished', arg?: string): void {
 	void status;
 	void arg;
 	loadRoutingModeSwitchState();
+	void ensureShortcutRegistration();
+}
 
-	try {
-		const failedIds = SHORTCUT_DEFINITIONS
-			.filter(definition => !registerShortcut(definition))
-			.map(definition => definition.id);
-
-		if (failedIds.length > 0) {
-			console.error(`[${extensionConfig.displayName}] Shortcut registration failed: ${failedIds.join(', ')}`);
-			eda.sys_Message.showToastMessage(
-				text('shortcut.registration.partialFailure'),
-				ESYS_ToastMessageType.WARNING,
-				5,
-			);
-		}
-	}
-	catch (error) {
-		console.error(`[${extensionConfig.displayName}] Shortcut registration error:`, error);
-		eda.sys_Message.showToastMessage(
-			text('shortcut.registration.error', formatError(error)),
-			ESYS_ToastMessageType.ERROR,
-			5,
-		);
-	}
+/**
+ * 供菜单诊断和自动化烟测等待异步快捷键注册完成。
+ */
+export async function waitForShortcutRegistration(): Promise<void> {
+	await ensureShortcutRegistration();
 }
 
 /**
@@ -177,7 +426,7 @@ export function activate(status?: 'onStartupFinished', arg?: string): void {
  */
 export function runSharedAction(): void {
 	executionCount += 1;
-	eda.sys_Message.showToastMessage(
+	showShortcutToast(
 		text('action.executed', executionCount),
 		ESYS_ToastMessageType.SUCCESS,
 		3,
@@ -200,14 +449,14 @@ function routingModeLabel(mode: number | undefined): string {
 }
 
 /**
- * 切换当前 PCB 文档的“阻挡”和“环绕”布线冲突模式。
+ * 切换当前 PCB 文档的“阻挡”和“忽略”布线冲突模式。
  *
  * 文档源码接口是官方 BETA API；只修改 PREFERENCE 记录中的 routingMode，
  * 不模拟键盘事件，也不覆盖嘉立创EDA系统快捷键。
  */
 export async function toggleRoutingConflictMode(): Promise<void> {
 	if (!routingModeSwitchEnabled) {
-		eda.sys_Message.showToastMessage(
+		showShortcutToast(
 			text('routingMode.switch.disabledHint'),
 			ESYS_ToastMessageType.INFO,
 			4,
@@ -216,7 +465,7 @@ export async function toggleRoutingConflictMode(): Promise<void> {
 	}
 
 	if (routingModeOperationInProgress) {
-		eda.sys_Message.showToastMessage(
+		showShortcutToast(
 			text('routingMode.busy'),
 			ESYS_ToastMessageType.WARNING,
 			3,
@@ -240,7 +489,7 @@ export async function toggleRoutingConflictMode(): Promise<void> {
 			throw new Error(text('routingMode.documentUnavailable'));
 		}
 
-		const update = toggleBlockSurroundRoutingModeInSource(source);
+		const update = toggleBlockIgnoreRoutingModeInSource(source);
 		if (!update) {
 			throw new Error(text('routingMode.notSupported'));
 		}
@@ -250,7 +499,7 @@ export async function toggleRoutingConflictMode(): Promise<void> {
 			throw new Error(text('routingMode.saveFailed'));
 		}
 
-		eda.sys_Message.showToastMessage(
+		showShortcutToast(
 			text(
 				'routingMode.changed',
 				routingModeLabel(update.previousMode),
@@ -262,7 +511,7 @@ export async function toggleRoutingConflictMode(): Promise<void> {
 	}
 	catch (error) {
 		console.error(`[${extensionConfig.displayName}] Failed to toggle routing mode:`, error);
-		eda.sys_Message.showToastMessage(
+		showShortcutToast(
 			text('routingMode.error', formatError(error)),
 			ESYS_ToastMessageType.ERROR,
 			5,
@@ -274,11 +523,11 @@ export async function toggleRoutingConflictMode(): Promise<void> {
 }
 
 /**
- * 持久化开启或关闭 Shift+R 的阻挡/环绕快速切换。
+ * 持久化开启或关闭 Shift+R 的阻挡/忽略快速切换。
  */
 export async function toggleRoutingModeShortcut(): Promise<void> {
 	if (routingModeSwitchOperationInProgress) {
-		eda.sys_Message.showToastMessage(
+		showShortcutToast(
 			text('routingMode.switch.busy'),
 			ESYS_ToastMessageType.WARNING,
 			3,
@@ -300,7 +549,7 @@ export async function toggleRoutingModeShortcut(): Promise<void> {
 		}
 
 		routingModeSwitchEnabled = nextState;
-		eda.sys_Message.showToastMessage(
+		showShortcutToast(
 			text(nextState ? 'routingMode.switch.enabled' : 'routingMode.switch.disabled'),
 			ESYS_ToastMessageType.SUCCESS,
 			4,
@@ -308,7 +557,7 @@ export async function toggleRoutingModeShortcut(): Promise<void> {
 	}
 	catch (error) {
 		console.error(`[${extensionConfig.displayName}] Failed to change routing mode switch state:`, error);
-		eda.sys_Message.showToastMessage(
+		showShortcutToast(
 			text('routingMode.switch.error', formatError(error)),
 			ESYS_ToastMessageType.ERROR,
 			5,
@@ -319,15 +568,128 @@ export async function toggleRoutingModeShortcut(): Promise<void> {
 	}
 }
 
-export function showShortcutStatus(): void {
+function normalizeShortcut(value: unknown): TSYS_ShortcutKeys | null | undefined {
+	if (value === null) {
+		return null;
+	}
+	if (!Array.isArray(value) || !value.every(key => typeof key === 'string')) {
+		return undefined;
+	}
+	return value as TSYS_ShortcutKeys;
+}
+
+function normalizeShortcutData(value: unknown): RuntimeShortcutData | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	return {
+		shortcutKey: normalizeShortcut(value.shortcutKey),
+		title: typeof value.title === 'string' ? value.title : undefined,
+		userDefinedShortcutKey: normalizeShortcut(value.userDefinedShortcutKey),
+	};
+}
+
+async function readLegacyShortcutEntries(api: RuntimeShortcutApi): Promise<RuntimeShortcutData[]> {
+	if (typeof api.getShortcutKeys !== 'function') {
+		return [];
+	}
+	const result = await api.getShortcutKeys(false);
+	if (!Array.isArray(result)) {
+		return [];
+	}
+	return result
+		.map(normalizeShortcutData)
+		.filter((entry): entry is RuntimeShortcutData => entry !== undefined);
+}
+
+function sameShortcut(left: TSYS_ShortcutKeys | null | undefined, right: TSYS_ShortcutKeys): boolean {
+	if (!left || left.length !== right.length) {
+		return false;
+	}
+	return [...left].sort().join('|') === [...right].sort().join('|');
+}
+
+async function readIdShortcutData(api: RuntimeShortcutApi, definition: ShortcutDefinition): Promise<RuntimeShortcutData | undefined> {
+	if (typeof api.get !== 'function') {
+		return undefined;
+	}
+	const result = await api.get(definition.id);
+	return normalizeShortcutData(result);
+}
+
+function shortcutApiLabel(mode: ShortcutRegistrationMode): string {
+	switch (mode) {
+		case 'id':
+			return text('shortcut.status.apiId');
+		case 'legacy':
+			return text('shortcut.status.apiLegacy');
+		default:
+			return text('shortcut.status.apiUnavailable');
+	}
+}
+
+function shortcutRegistrationLabel(): string {
+	if (!shortcutRegistrationAttempted) {
+		return text('shortcut.status.registrationPending');
+	}
+	const failedCount = SHORTCUT_DEFINITIONS.filter(
+		definition => shortcutRegistrationResults.get(definition.id) !== true,
+	).length;
+	if (failedCount === 0 && shortcutRegistrationResults.size === SHORTCUT_DEFINITIONS.length) {
+		return text('shortcut.status.registrationSuccess');
+	}
+	if (shortcutRegistrationError) {
+		return text('shortcut.status.registrationError', shortcutRegistrationError);
+	}
+	return text('shortcut.status.registrationFailure', failedCount);
+}
+
+function shortcutRegistrationResultLabel(definition: ShortcutDefinition): string {
+	const result = shortcutRegistrationResults.get(definition.id);
+	if (result === true) {
+		return text('shortcut.status.registrationOk');
+	}
+	const error = shortcutRegistrationErrors.get(definition.id);
+	return error
+		? text('shortcut.status.registrationItemError', error)
+		: text('shortcut.status.registrationNotOk');
+}
+
+export async function showShortcutStatus(): Promise<void> {
 	try {
+		await ensureShortcutRegistration();
+		const api = getShortcutApi();
+		const legacyEntries = shortcutRegistrationMode === 'legacy'
+			? await readLegacyShortcutEntries(api)
+			: [];
 		const routingSwitchStatus = routingModeSwitchEnabled
 			? text('routingMode.switch.statusEnabled')
 			: text('routingMode.switch.statusDisabled');
-		const statusLines = SHORTCUT_DEFINITIONS.map((definition) => {
-			const registered = eda.sys_ShortcutKey.get(definition.id);
+		const statusLines: string[] = [];
+
+		for (const definition of SHORTCUT_DEFINITIONS) {
+			const title = text(definition.titleTag);
+			const registered = shortcutRegistrationMode === 'legacy'
+				? legacyEntries.find(entry => entry.title === title
+					|| sameShortcut(entry.shortcutKey, definition.defaultShortcut))
+				: await readIdShortcutData(api, definition);
+
 			if (!registered) {
-				return `${text(definition.titleTag)}\n  ${text('shortcut.status.notRegistered')}`;
+				statusLines.push([
+					title,
+					`  ${text('shortcut.status.registration')}: ${shortcutRegistrationResultLabel(definition)}`,
+					`  ${text('shortcut.status.notRegistered')}`,
+				].join('\n'));
+				continue;
+			}
+
+			if (shortcutRegistrationMode === 'legacy') {
+				statusLines.push([
+					title,
+					`  ${text('shortcut.status.registration')}: ${shortcutRegistrationResultLabel(definition)}`,
+					`  ${text('shortcut.status.legacyKey')}: ${formatShortcut(registered.shortcutKey)}`,
+				].join('\n'));
+				continue;
 			}
 
 			const hasUserDefinition = registered.userDefinedShortcutKey !== undefined;
@@ -338,15 +700,18 @@ export function showShortcutStatus(): void {
 				? text('shortcut.status.userDefined')
 				: text('shortcut.status.default');
 
-			return [
-				text(definition.titleTag),
+			statusLines.push([
+				title,
+				`  ${text('shortcut.status.registration')}: ${shortcutRegistrationResultLabel(definition)}`,
 				`  ${text('shortcut.status.defaultKey')}: ${formatShortcut(registered.shortcutKey)}`,
 				`  ${text('shortcut.status.effectiveKey')}: ${formatShortcut(effectiveShortcut)} (${source})`,
-			].join('\n');
-		});
+			].join('\n'));
+		}
 
 		eda.sys_Dialog.showInformationMessage(
 			[
+				text('shortcut.status.api', shortcutApiLabel(shortcutRegistrationMode)),
+				text('shortcut.status.registrationSummary', shortcutRegistrationLabel()),
 				text('routingMode.switch.status', routingSwitchStatus),
 				...statusLines,
 			].join('\n\n'),

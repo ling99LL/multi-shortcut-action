@@ -1,7 +1,7 @@
 {
 	"name": "multi-shortcut-action",
 	"type": "module",
-	"version": "1.2.0",
+	"version": "1.3.1",
 	"private": true,
 	"description": "EasyEDA extension demonstrating multiple shortcuts bound to one shared action.",
 	"author": "鸢枭",

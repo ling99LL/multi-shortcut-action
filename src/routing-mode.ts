@@ -26,6 +26,11 @@ interface RoutingModeTarget {
 	wrap: (body: JsonObject) => unknown;
 }
 
+interface RoutingModeValue {
+	mode: number | undefined;
+	encode: (mode: number) => number | string;
+}
+
 export interface RoutingModeUpdate {
 	source: string;
 	previousMode: number | undefined;
@@ -152,18 +157,53 @@ function skipWhitespace(source: string, start: number): number {
 	return index;
 }
 
-function getRoutingMode(body: JsonObject): number | undefined {
+function getRoutingModeValue(body: JsonObject): RoutingModeValue {
 	const value = body.routingMode;
 	if (typeof value === 'number' && Number.isFinite(value)) {
-		return value;
+		return {
+			mode: value,
+			encode: mode => mode,
+		};
 	}
+
 	if (typeof value === 'string' && value.trim() !== '') {
+		const normalizedValue = value.trim().toUpperCase();
+		const symbolicModes: Record<string, number> = {
+			NONE: ROUTING_MODE_IGNORE,
+			IGNORE: ROUTING_MODE_IGNORE,
+			PUSH: ROUTING_MODE_PUSH,
+			SURROUND: ROUTING_MODE_SURROUND,
+			OBSTRUCT: ROUTING_MODE_BLOCK,
+			BLOCK: ROUTING_MODE_BLOCK,
+		};
+		const symbolicMode = symbolicModes[normalizedValue];
+		if (symbolicMode !== undefined) {
+			return {
+				mode: symbolicMode,
+				encode: mode => mode === ROUTING_MODE_IGNORE ? 'NONE' : 'OBSTRUCT',
+			};
+		}
+
 		const numericValue = Number(value);
 		if (Number.isFinite(numericValue)) {
-			return numericValue;
+			return {
+				mode: numericValue,
+				encode: mode => String(mode),
+			};
 		}
+
+		// V4.x stores the routing enum symbolically. Unknown symbolic values
+		// still need a valid symbolic output when normalizing to Block.
+		return {
+			mode: undefined,
+			encode: mode => mode === ROUTING_MODE_IGNORE ? 'NONE' : 'OBSTRUCT',
+		};
 	}
-	return undefined;
+
+	return {
+		mode: undefined,
+		encode: mode => mode,
+	};
 }
 
 function findRoutingModeTarget(source: string): RoutingModeTarget | undefined {
@@ -229,20 +269,21 @@ function findRoutingModeTarget(source: string): RoutingModeTarget | undefined {
 }
 
 /**
- * Toggle the current PCB document's routing mode between block and surround.
- * Other modes (ignore or push) intentionally move to block first.
+ * Toggle the current PCB document's routing mode between block and ignore.
+ * Other modes (push or surround) intentionally move to block first.
  */
-export function toggleBlockSurroundRoutingModeInSource(source: string): RoutingModeUpdate | undefined {
+export function toggleBlockIgnoreRoutingModeInSource(source: string): RoutingModeUpdate | undefined {
 	const target = findRoutingModeTarget(source);
 	if (!target) {
 		return undefined;
 	}
 
-	const previousMode = getRoutingMode(target.body);
+	const routingModeValue = getRoutingModeValue(target.body);
+	const previousMode = routingModeValue.mode;
 	const nextMode = previousMode === ROUTING_MODE_BLOCK
-		? ROUTING_MODE_SURROUND
+		? ROUTING_MODE_IGNORE
 		: ROUTING_MODE_BLOCK;
-	const updatedBody = { ...target.body, routingMode: nextMode };
+	const updatedBody = { ...target.body, routingMode: routingModeValue.encode(nextMode) };
 	const replacement = JSON.stringify(target.wrap(updatedBody));
 	if (replacement === undefined) {
 		return undefined;
