@@ -25,7 +25,8 @@ var edaEsbuildExportName = (() => {
     activate: () => activate,
     runSharedAction: () => runSharedAction,
     showShortcutStatus: () => showShortcutStatus,
-    toggleRoutingConflictMode: () => toggleRoutingConflictMode
+    toggleRoutingConflictMode: () => toggleRoutingConflictMode,
+    toggleRoutingModeShortcut: () => toggleRoutingModeShortcut
   });
 
   // extension.json
@@ -33,8 +34,8 @@ var edaEsbuildExportName = (() => {
     name: "multi-shortcut-action",
     uuid: "fc3eb57005174eb08b1858b99e4f1f02",
     displayName: "\u591A\u5FEB\u6377\u952E\u52A8\u4F5C",
-    description: "\u8BA9\u9876\u90E8\u83DC\u5355\u3001\u4E3B\u5FEB\u6377\u952E\u548C\u5907\u7528\u5FEB\u6377\u952E\u5171\u540C\u89E6\u53D1\u540C\u4E00\u4E2A\u63D2\u4EF6\u52A8\u4F5C\uFF0C\u5E76\u63D0\u4F9BPCB\u5E03\u7EBF\u51B2\u7A81\u6A21\u5F0F\u5207\u6362\u5FEB\u6377\u952E\uFF1B\u6240\u6709\u5FEB\u6377\u952E\u5747\u53EF\u5728\u8BBE\u7F6E\u4E2D\u4FEE\u6539\u3002",
-    version: "1.1.0",
+    description: "\u8BA9\u9876\u90E8\u83DC\u5355\u3001\u4E3B\u5FEB\u6377\u952E\u548C\u5907\u7528\u5FEB\u6377\u952E\u5171\u540C\u89E6\u53D1\u540C\u4E00\u4E2A\u63D2\u4EF6\u52A8\u4F5C\uFF0C\u5E76\u63D0\u4F9B\u53EF\u5F00\u5173\u7684PCB\u5E03\u7EBF\u6A21\u5F0F\u5FEB\u6377\u5207\u6362\uFF1B\u5F00\u542F\u540E\u6309Shift+R\u4EC5\u5728\u963B\u6321\u548C\u73AF\u7ED5\u4E4B\u95F4\u5207\u6362\uFF0C\u6240\u6709\u5FEB\u6377\u952E\u5747\u53EF\u5728\u8BBE\u7F6E\u4E2D\u4FEE\u6539\u3002",
+    version: "1.2.0",
     publisher: "\u9E22\u67AD",
     engines: {
       eda: "^4.2.0"
@@ -71,6 +72,11 @@ var edaEsbuildExportName = (() => {
               id: "multi-shortcut-action-run-home",
               title: "\u6267\u884C\u5171\u4EAB\u52A8\u4F5C",
               registerFn: "runSharedAction"
+            },
+            {
+              id: "multi-shortcut-action-routing-mode-switch-home",
+              title: "\u5F00\u5173\uFF1AShift+R \u4EC5\u5207\u6362\u963B\u6321/\u73AF\u7ED5",
+              registerFn: "toggleRoutingModeShortcut"
             },
             {
               id: "multi-shortcut-action-status-home",
@@ -120,8 +126,8 @@ var edaEsbuildExportName = (() => {
             },
             {
               id: "multi-shortcut-action-routing-mode-pcb",
-              title: "\u5207\u6362\u5E03\u7EBF\u51B2\u7A81\u6A21\u5F0F\uFF08\u963B\u6321/\u5FFD\u7565\uFF09",
-              registerFn: "toggleRoutingConflictMode"
+              title: "\u5F00\u5173\uFF1AShift+R \u4EC5\u5207\u6362\u963B\u6321/\u73AF\u7ED5",
+              registerFn: "toggleRoutingModeShortcut"
             },
             {
               id: "multi-shortcut-action-status-pcb",
@@ -305,13 +311,13 @@ var edaEsbuildExportName = (() => {
     }
     return void 0;
   }
-  function toggleRoutingModeInSource(source) {
+  function toggleBlockSurroundRoutingModeInSource(source) {
     const target = findRoutingModeTarget(source);
     if (!target) {
       return void 0;
     }
     const previousMode = getRoutingMode(target.body);
-    const nextMode = previousMode === ROUTING_MODE_BLOCK ? ROUTING_MODE_IGNORE : ROUTING_MODE_BLOCK;
+    const nextMode = previousMode === ROUTING_MODE_BLOCK ? ROUTING_MODE_SURROUND : ROUTING_MODE_BLOCK;
     const updatedBody = { ...target.body, routingMode: nextMode };
     const replacement = JSON.stringify(target.wrap(updatedBody));
     if (replacement === void 0) {
@@ -341,7 +347,7 @@ var edaEsbuildExportName = (() => {
     {
       id: "routing-mode-toggle",
       titleTag: "shortcut.routingMode.title",
-      defaultShortcut: ["CONTROL", "ALT", "SHIFT", "F11"],
+      defaultShortcut: ["SHIFT", "R"],
       action: "routingMode",
       remarkTag: "shortcut.routingMode.remark",
       range: [ESYS_ShortcutKeyEffectiveEditorRange.PCB]
@@ -387,7 +393,10 @@ var edaEsbuildExportName = (() => {
     SUPER: "Super",
     WIN: "Win"
   };
+  var ROUTING_MODE_SWITCH_CONFIG_KEY = "routingModeShortcutEnabled";
   var executionCount = 0;
+  var routingModeSwitchEnabled = false;
+  var routingModeSwitchOperationInProgress = false;
   var routingModeOperationInProgress = false;
   function text(tag, ...args) {
     return eda.sys_I18n.text(tag, void 0, void 0, ...args);
@@ -414,7 +423,20 @@ var edaEsbuildExportName = (() => {
       callFn: getShortcutAction(definition.action)
     });
   }
+  function loadRoutingModeSwitchState() {
+    try {
+      const storage = eda.sys_Storage;
+      if (!storage || typeof storage.getExtensionUserConfig !== "function") {
+        return;
+      }
+      routingModeSwitchEnabled = storage.getExtensionUserConfig(ROUTING_MODE_SWITCH_CONFIG_KEY) === true;
+    } catch (error) {
+      console.error(`[${extension_default.displayName}] Failed to load routing mode switch state:`, error);
+      routingModeSwitchEnabled = false;
+    }
+  }
   function activate(status, arg) {
+    loadRoutingModeSwitchState();
     try {
       const failedIds = SHORTCUT_DEFINITIONS.filter((definition) => !registerShortcut(definition)).map((definition) => definition.id);
       if (failedIds.length > 0) {
@@ -457,6 +479,14 @@ var edaEsbuildExportName = (() => {
     }
   }
   async function toggleRoutingConflictMode() {
+    if (!routingModeSwitchEnabled) {
+      eda.sys_Message.showToastMessage(
+        text("routingMode.switch.disabledHint"),
+        ESYS_ToastMessageType.INFO,
+        4
+      );
+      return;
+    }
     if (routingModeOperationInProgress) {
       eda.sys_Message.showToastMessage(
         text("routingMode.busy"),
@@ -475,7 +505,7 @@ var edaEsbuildExportName = (() => {
       if (typeof source !== "string" || source.length === 0) {
         throw new Error(text("routingMode.documentUnavailable"));
       }
-      const update = toggleRoutingModeInSource(source);
+      const update = toggleBlockSurroundRoutingModeInSource(source);
       if (!update) {
         throw new Error(text("routingMode.notSupported"));
       }
@@ -503,8 +533,46 @@ var edaEsbuildExportName = (() => {
       routingModeOperationInProgress = false;
     }
   }
+  async function toggleRoutingModeShortcut() {
+    if (routingModeSwitchOperationInProgress) {
+      eda.sys_Message.showToastMessage(
+        text("routingMode.switch.busy"),
+        ESYS_ToastMessageType.WARNING,
+        3
+      );
+      return;
+    }
+    routingModeSwitchOperationInProgress = true;
+    const nextState = !routingModeSwitchEnabled;
+    try {
+      const storage = eda.sys_Storage;
+      if (!storage || typeof storage.setExtensionUserConfig !== "function") {
+        throw new Error(text("routingMode.switch.storageUnavailable"));
+      }
+      const saved = await storage.setExtensionUserConfig(ROUTING_MODE_SWITCH_CONFIG_KEY, nextState);
+      if (!saved) {
+        throw new Error(text("routingMode.switch.saveFailed"));
+      }
+      routingModeSwitchEnabled = nextState;
+      eda.sys_Message.showToastMessage(
+        text(nextState ? "routingMode.switch.enabled" : "routingMode.switch.disabled"),
+        ESYS_ToastMessageType.SUCCESS,
+        4
+      );
+    } catch (error) {
+      console.error(`[${extension_default.displayName}] Failed to change routing mode switch state:`, error);
+      eda.sys_Message.showToastMessage(
+        text("routingMode.switch.error", formatError(error)),
+        ESYS_ToastMessageType.ERROR,
+        5
+      );
+    } finally {
+      routingModeSwitchOperationInProgress = false;
+    }
+  }
   function showShortcutStatus() {
     try {
+      const routingSwitchStatus = routingModeSwitchEnabled ? text("routingMode.switch.statusEnabled") : text("routingMode.switch.statusDisabled");
       const statusLines = SHORTCUT_DEFINITIONS.map((definition) => {
         const registered = eda.sys_ShortcutKey.get(definition.id);
         if (!registered) {
@@ -521,7 +589,10 @@ var edaEsbuildExportName = (() => {
         ].join("\n");
       });
       eda.sys_Dialog.showInformationMessage(
-        statusLines.join("\n\n"),
+        [
+          text("routingMode.switch.status", routingSwitchStatus),
+          ...statusLines
+        ].join("\n\n"),
         text("shortcut.status.title"),
         text("dialog.close")
       );
@@ -543,6 +614,10 @@ var edaEsbuildExportName = (() => {
         text("about.defaultPrimary", formatShortcut(SHORTCUT_DEFINITIONS[0].defaultShortcut)),
         text("about.defaultSecondary", formatShortcut(SHORTCUT_DEFINITIONS[1].defaultShortcut)),
         text("about.defaultRoutingMode", formatShortcut(routingModeShortcut?.defaultShortcut)),
+        text(
+          "routingMode.switch.aboutStatus",
+          routingModeSwitchEnabled ? text("routingMode.switch.statusEnabled") : text("routingMode.switch.statusDisabled")
+        ),
         "",
         text("about.settingsHint"),
         text("about.systemLimit"),

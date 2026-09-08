@@ -2,8 +2,8 @@
 	"name": "multi-shortcut-action",
 	"uuid": "fc3eb57005174eb08b1858b99e4f1f02",
 	"displayName": "多快捷键动作",
-	"description": "让顶部菜单、主快捷键和备用快捷键共同触发同一个插件动作，并提供PCB布线冲突模式切换快捷键；所有快捷键均可在设置中修改。",
-	"version": "1.1.0",
+	"description": "让顶部菜单、主快捷键和备用快捷键共同触发同一个插件动作，并提供可开关的PCB布线模式快捷切换；开启后按Shift+R仅在阻挡和环绕之间切换，所有快捷键均可在设置中修改。",
+	"version": "1.2.0",
 	"publisher": "鸢枭",
 	"engines": {
 		"eda": "^4.2.0"
@@ -40,6 +40,11 @@
 						"id": "multi-shortcut-action-run-home",
 						"title": "执行共享动作",
 						"registerFn": "runSharedAction"
+					},
+					{
+						"id": "multi-shortcut-action-routing-mode-switch-home",
+						"title": "开关：Shift+R 仅切换阻挡/环绕",
+						"registerFn": "toggleRoutingModeShortcut"
 					},
 					{
 						"id": "multi-shortcut-action-status-home",
@@ -89,8 +94,8 @@
 					},
 					{
 						"id": "multi-shortcut-action-routing-mode-pcb",
-						"title": "切换布线冲突模式（阻挡/忽略）",
-						"registerFn": "toggleRoutingConflictMode"
+						"title": "开关：Shift+R 仅切换阻挡/环绕",
+						"registerFn": "toggleRoutingModeShortcut"
 					},
 					{
 						"id": "multi-shortcut-action-status-pcb",

@@ -1,9 +1,9 @@
 /**
  * 多快捷键动作 / Multi-Shortcut Action
  *
- * 两个独立快捷键注册项共享同一个回调函数，并提供一个仅在 PCB 编辑器
- * 生效的布线冲突模式切换快捷键。每个快捷键都可以在嘉立创EDA的快捷键
- * 设置中单独修改。
+ * 两个独立快捷键注册项共享同一个回调函数，并提供一个可开关、仅在 PCB
+ * 编辑器生效的阻挡/环绕布线模式快捷切换。每个快捷键都可以在嘉立创EDA
+ * 的快捷键设置中单独修改。
  */
 import extensionConfig from '../extension.json' with { type: 'json' };
 import {
@@ -11,7 +11,7 @@ import {
 	ROUTING_MODE_IGNORE,
 	ROUTING_MODE_PUSH,
 	ROUTING_MODE_SURROUND,
-	toggleRoutingModeInSource,
+	toggleBlockSurroundRoutingModeInSource,
 } from './routing-mode';
 
 type ShortcutAction = 'shared' | 'routingMode';
@@ -41,7 +41,7 @@ const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 	{
 		id: 'routing-mode-toggle',
 		titleTag: 'shortcut.routingMode.title',
-		defaultShortcut: ['CONTROL', 'ALT', 'SHIFT', 'F11'],
+		defaultShortcut: ['SHIFT', 'R'],
 		action: 'routingMode',
 		remarkTag: 'shortcut.routingMode.remark',
 		range: [ESYS_ShortcutKeyEffectiveEditorRange.PCB],
@@ -91,7 +91,11 @@ const KEY_LABELS: Partial<Record<TSYS_ShortcutKeys[number], string>> = {
 	WIN: 'Win',
 };
 
+const ROUTING_MODE_SWITCH_CONFIG_KEY = 'routingModeShortcutEnabled';
+
 let executionCount = 0;
+let routingModeSwitchEnabled = false;
+let routingModeSwitchOperationInProgress = false;
 let routingModeOperationInProgress = false;
 
 function text(tag: string, ...args: unknown[]): string {
@@ -124,9 +128,25 @@ function registerShortcut(definition: ShortcutDefinition): boolean {
 	});
 }
 
+function loadRoutingModeSwitchState(): void {
+	try {
+		const storage = eda.sys_Storage;
+		if (!storage || typeof storage.getExtensionUserConfig !== 'function') {
+			return;
+		}
+
+		routingModeSwitchEnabled = storage.getExtensionUserConfig(ROUTING_MODE_SWITCH_CONFIG_KEY) === true;
+	}
+	catch (error) {
+		console.error(`[${extensionConfig.displayName}] Failed to load routing mode switch state:`, error);
+		routingModeSwitchEnabled = false;
+	}
+}
+
 export function activate(status?: 'onStartupFinished', arg?: string): void {
 	void status;
 	void arg;
+	loadRoutingModeSwitchState();
 
 	try {
 		const failedIds = SHORTCUT_DEFINITIONS
@@ -180,12 +200,21 @@ function routingModeLabel(mode: number | undefined): string {
 }
 
 /**
- * 在当前 PCB 文档的“忽略”和“阻挡”之间切换布线冲突模式。
+ * 切换当前 PCB 文档的“阻挡”和“环绕”布线冲突模式。
  *
  * 文档源码接口是官方 BETA API；只修改 PREFERENCE 记录中的 routingMode，
  * 不模拟键盘事件，也不覆盖嘉立创EDA系统快捷键。
  */
 export async function toggleRoutingConflictMode(): Promise<void> {
+	if (!routingModeSwitchEnabled) {
+		eda.sys_Message.showToastMessage(
+			text('routingMode.switch.disabledHint'),
+			ESYS_ToastMessageType.INFO,
+			4,
+		);
+		return;
+	}
+
 	if (routingModeOperationInProgress) {
 		eda.sys_Message.showToastMessage(
 			text('routingMode.busy'),
@@ -211,7 +240,7 @@ export async function toggleRoutingConflictMode(): Promise<void> {
 			throw new Error(text('routingMode.documentUnavailable'));
 		}
 
-		const update = toggleRoutingModeInSource(source);
+		const update = toggleBlockSurroundRoutingModeInSource(source);
 		if (!update) {
 			throw new Error(text('routingMode.notSupported'));
 		}
@@ -244,8 +273,57 @@ export async function toggleRoutingConflictMode(): Promise<void> {
 	}
 }
 
+/**
+ * 持久化开启或关闭 Shift+R 的阻挡/环绕快速切换。
+ */
+export async function toggleRoutingModeShortcut(): Promise<void> {
+	if (routingModeSwitchOperationInProgress) {
+		eda.sys_Message.showToastMessage(
+			text('routingMode.switch.busy'),
+			ESYS_ToastMessageType.WARNING,
+			3,
+		);
+		return;
+	}
+
+	routingModeSwitchOperationInProgress = true;
+	const nextState = !routingModeSwitchEnabled;
+	try {
+		const storage = eda.sys_Storage;
+		if (!storage || typeof storage.setExtensionUserConfig !== 'function') {
+			throw new Error(text('routingMode.switch.storageUnavailable'));
+		}
+
+		const saved = await storage.setExtensionUserConfig(ROUTING_MODE_SWITCH_CONFIG_KEY, nextState);
+		if (!saved) {
+			throw new Error(text('routingMode.switch.saveFailed'));
+		}
+
+		routingModeSwitchEnabled = nextState;
+		eda.sys_Message.showToastMessage(
+			text(nextState ? 'routingMode.switch.enabled' : 'routingMode.switch.disabled'),
+			ESYS_ToastMessageType.SUCCESS,
+			4,
+		);
+	}
+	catch (error) {
+		console.error(`[${extensionConfig.displayName}] Failed to change routing mode switch state:`, error);
+		eda.sys_Message.showToastMessage(
+			text('routingMode.switch.error', formatError(error)),
+			ESYS_ToastMessageType.ERROR,
+			5,
+		);
+	}
+	finally {
+		routingModeSwitchOperationInProgress = false;
+	}
+}
+
 export function showShortcutStatus(): void {
 	try {
+		const routingSwitchStatus = routingModeSwitchEnabled
+			? text('routingMode.switch.statusEnabled')
+			: text('routingMode.switch.statusDisabled');
 		const statusLines = SHORTCUT_DEFINITIONS.map((definition) => {
 			const registered = eda.sys_ShortcutKey.get(definition.id);
 			if (!registered) {
@@ -268,7 +346,10 @@ export function showShortcutStatus(): void {
 		});
 
 		eda.sys_Dialog.showInformationMessage(
-			statusLines.join('\n\n'),
+			[
+				text('routingMode.switch.status', routingSwitchStatus),
+				...statusLines,
+			].join('\n\n'),
 			text('shortcut.status.title'),
 			text('dialog.close'),
 		);
@@ -292,6 +373,12 @@ export function about(): void {
 			text('about.defaultPrimary', formatShortcut(SHORTCUT_DEFINITIONS[0].defaultShortcut)),
 			text('about.defaultSecondary', formatShortcut(SHORTCUT_DEFINITIONS[1].defaultShortcut)),
 			text('about.defaultRoutingMode', formatShortcut(routingModeShortcut?.defaultShortcut)),
+			text(
+				'routingMode.switch.aboutStatus',
+				routingModeSwitchEnabled
+					? text('routingMode.switch.statusEnabled')
+					: text('routingMode.switch.statusDisabled'),
+			),
 			'',
 			text('about.settingsHint'),
 			text('about.systemLimit'),

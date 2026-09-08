@@ -229,10 +229,10 @@ function findRoutingModeTarget(source: string): RoutingModeTarget | undefined {
 }
 
 /**
- * Toggle the current PCB document's routing mode between ignore and block.
- * Other modes (push or surround) intentionally move to block first.
+ * Toggle the current PCB document's routing mode between block and surround.
+ * Other modes (ignore or push) intentionally move to block first.
  */
-export function toggleRoutingModeInSource(source: string): RoutingModeUpdate | undefined {
+export function toggleBlockSurroundRoutingModeInSource(source: string): RoutingModeUpdate | undefined {
 	const target = findRoutingModeTarget(source);
 	if (!target) {
 		return undefined;
@@ -240,7 +240,7 @@ export function toggleRoutingModeInSource(source: string): RoutingModeUpdate | u
 
 	const previousMode = getRoutingMode(target.body);
 	const nextMode = previousMode === ROUTING_MODE_BLOCK
-		? ROUTING_MODE_IGNORE
+		? ROUTING_MODE_SURROUND
 		: ROUTING_MODE_BLOCK;
 	const updatedBody = { ...target.body, routingMode: nextMode };
 	const replacement = JSON.stringify(target.wrap(updatedBody));
